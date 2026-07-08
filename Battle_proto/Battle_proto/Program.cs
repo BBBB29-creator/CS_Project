@@ -74,7 +74,7 @@ namespace RealtimeAtbRpg
             Console.SetCursorPosition(0, 14);
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.WriteLine("\n=========================================================");
-            Console.WriteLine(" 전투가 최종 종료되었습니다. 프로그램을 종료하려면 아무 키나 누르세요.");
+            Console.WriteLine("   전투가 종료되었습니다. 종료하려면 아무 키나 누르세요.");
             Console.WriteLine("=========================================================");
             Console.ResetColor();
 
@@ -222,7 +222,12 @@ namespace RealtimeAtbRpg
 
             if (_isBattleOver)
             {
-                Console.ForegroundColor = ConsoleColor.Yellow; // 종료 안내는 노란색으로 강조
+                // [이거 딱 4줄만 추가!] 패배 글자가 있으면 빨간색, 없으면 기존 하늘색(Cyan)
+                if (_battleResultText.Contains("패배"))
+                    Console.ForegroundColor = ConsoleColor.Red;
+                else
+                    Console.ForegroundColor = ConsoleColor.Cyan;
+
                 Console.WriteLine($"{_battleResultText,-55}");
                 Console.ResetColor();
             }
