@@ -2,16 +2,15 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
-namespace ConsoleAtbRpg
+namespace RealtimeAtbRpg
 {
-    // [비주얼 스크립트 노드]
     public class Character
     {
         public string Name { get; set; }
         public int Hp { get; set; }
         public int MaxHp { get; set; }
-        public int Speed { get; set; }      // 게이지가 차오르는 속도
-        public double AtbGauge { get; set; } // 현재 ATB 게이지 (100이 되면 턴 획득)
+        public int Speed { get; set; }
+        public double AtbGauge { get; set; }
         public bool IsPlayer { get; set; }
 
         public Character(string name, int hp, int speed, bool isPlayer)
@@ -19,7 +18,7 @@ namespace ConsoleAtbRpg
             Name = name;
             Hp = hp;
             MaxHp = hp;
-            Speed = speed;
+            Speed = (int)(speed * 0.8);
             AtbGauge = 0;
             IsPlayer = isPlayer;
         }
@@ -29,123 +28,212 @@ namespace ConsoleAtbRpg
     {
         private static List<Character> _characters = new List<Character>();
         private static bool _isBattleOver = false;
+        private static string _battleResultText = ""; // [추가] 최종 승패를 저장할 변수
+        private static Queue<string> _battleLogs = new Queue<string>();
+        private static bool _isPlayerTurnActive = false;
+
+        private static readonly object _lockObject = new object();
 
         static async Task Main(string[] args)
         {
-            Console.Clear();
-            Console.WriteLine("=== 비주얼 스크립트 스타일 ATB 전투 시작 ===");
+            // [핵심 추가] 콘솔창이 유니코드(UTF-8) 이모지를 지원하도록 인코딩 노드 설정
+            Console.OutputEncoding = System.Text.Encoding.UTF8;
 
-            // 캐릭터 데이터 노드 초기화
+            Console.Clear();
+            Console.CursorVisible = false;
+
             _characters.Add(new Character("용사 (플레이어)", 100, 40, true));
             _characters.Add(new Character("슬라임 (몬스터)", 60, 25, false));
 
-            // 메인 루프 (실시간 dynamic 연산 구동)
+            _ = Task.Run(() => StartInputListener());
+
+            AddLog("=== 실시간 전투 시작! ===");
+
+            // 메인 실시간 루프
             while (!_isBattleOver)
             {
-                UpdateAtbGauges();
-                RenderStatus();
-
-                // 턴이 가득 찬 캐릭터가 있는지 체크 (비주얼 스크립트의 '조건 분기 노드' 역할)
-                Character readyChar = _characters.Find(c => c.AtbGauge >= 100);
-                if (readyChar != null)
+                lock (_lockObject)
                 {
-                    await ExecuteTurnNode(readyChar);
+                    UpdateAtbGauges();
+                    RenderScreen();
                 }
-
-                CheckBattleOver();
-                await Task.Delay(100); // 0.1초마다 실시간으로 흐름을 갱신 (Tick)
+                await Task.Delay(100);
             }
 
-            Console.WriteLine("\n전투가 종료되었습니다.");
+            // [핵심 해결] 게임 종료 직후 0.2초 여유를 주어 백그라운드 렌더링 잔상을 기다림
+            await Task.Delay(200);
+
+            // 최종 화면 강제 갱신
+            lock (_lockObject)
+            {
+                Console.Clear(); // 콘솔 잔상을 완벽하게 밀어버림
+                RenderScreen();
+            }
+
+            // 하단 종료 안내
+            Console.SetCursorPosition(0, 14);
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("\n=========================================================");
+            Console.WriteLine(" 전투가 최종 종료되었습니다. 프로그램을 종료하려면 아무 키나 누르세요.");
+            Console.WriteLine("=========================================================");
+            Console.ResetColor();
+
+            Console.CursorVisible = true;
+            Console.ReadKey();
         }
 
-        // [노드 1] 실시간 ATB 게이지 충전 노드
         private static void UpdateAtbGauges()
         {
+            if (_isBattleOver) return;
+
             foreach (var character in _characters)
             {
-                if (character.Hp > 0)
+                if (character.Hp <= 0)
                 {
-                    // 속도에 비례하여 게이지 누적 (실시간 물리/시간 연산)
+                    character.AtbGauge = 0;
+                    continue;
+                }
+
+                if (character.AtbGauge < 100)
+                {
                     character.AtbGauge += character.Speed * 0.1;
                     if (character.AtbGauge > 100) character.AtbGauge = 100;
                 }
+
+                if (!character.IsPlayer && character.AtbGauge >= 100)
+                {
+                    ExecuteMonsterTurn(character);
+                }
+                else if (character.IsPlayer && character.AtbGauge >= 100)
+                {
+                    _isPlayerTurnActive = true;
+                }
             }
         }
 
-        // [노드 2] 화면 UI 출력 노드 (콘솔 화면을 깔끔하게 유지)
-        private static void RenderStatus()
+        private static void StartInputListener()
         {
-            Console.SetCursorPosition(0, 2);
+            while (!_isBattleOver)
+            {
+                if (Console.KeyAvailable)
+                {
+                    ConsoleKeyInfo keyInfo = Console.ReadKey(intercept: true);
+
+                    lock (_lockObject)
+                    {
+                        if (_isPlayerTurnActive && !_isBattleOver)
+                        {
+                            Character player = _characters.Find(c => c.IsPlayer);
+                            Character target = _characters.Find(c => !c.IsPlayer && c.Hp > 0);
+
+                            if (player == null || player.Hp <= 0) continue;
+
+                            if (keyInfo.KeyChar == '1' && target != null)
+                            {
+                                target.Hp -= 20;
+                                if (target.Hp <= 0) target.Hp = 0;
+
+                                AddLog($"[용사] 공격! -> {target.Name}에게 20의 피해!");
+                                ResetPlayerTurn(player);
+
+                                if (target.Hp <= 0)
+                                {
+                                    _battleResultText = "▶ 🎉 승리! 슬라임을 완벽하게 제압했습니다!";
+                                    _isBattleOver = true;
+                                    _isPlayerTurnActive = false;
+                                }
+                            }
+                            else if (keyInfo.KeyChar == '2')
+                            {
+                                player.Hp = Math.Min(player.MaxHp, player.Hp + 15);
+                                AddLog($"✨ [용사] 힐! -> 자신의 HP를 15 회복했습니다.");
+                                ResetPlayerTurn(player);
+                            }
+                        }
+                    }
+                }
+                System.Threading.Thread.Sleep(20);
+            }
+        }
+
+        private static void ResetPlayerTurn(Character player)
+        {
+            player.AtbGauge = 0;
+            _isPlayerTurnActive = false;
+        }
+
+        private static void ExecuteMonsterTurn(Character monster)
+        {
+            if (_isBattleOver) return;
+
+            Character target = _characters.Find(c => c.IsPlayer && c.Hp > 0);
+            if (target != null)
+            {
+                target.Hp -= 12;
+                if (target.Hp <= 0) target.Hp = 0;
+
+                AddLog($"슬라임 (몬스터)의 기습 공격! -> [용사]에게 12의 피해!");
+
+                if (target.Hp <= 0)
+                {
+                    _battleResultText = "▶ 💀 패배... 용사가 차가운 바닥에 쓰러졌습니다.";
+                    _isBattleOver = true;
+                    _isPlayerTurnActive = false;
+                }
+            }
+            monster.AtbGauge = 0;
+        }
+
+        private static void AddLog(string message)
+        {
+            _battleLogs.Enqueue(message);
+            if (_battleLogs.Count > 5)
+            {
+                _battleLogs.Dequeue();
+            }
+        }
+
+        private static void RenderScreen()
+        {
+            // 좌표를 위로 강제 고정하여 잔상 방지
+            Console.SetCursorPosition(0, 1);
+            Console.WriteLine("=========================================================");
+
             foreach (var c in _characters)
             {
-                string gaugeBar = new string('■', (int)(c.AtbGauge / 10)) + new string('□', 10 - (int)(c.AtbGauge / 10));
-                Console.WriteLine($"{c.Name,-15} | HP: {c.Hp,3}/{c.MaxHp,3} | ATB: [{gaugeBar}] {c.AtbGauge:F0}%   ");
+                // [변경] 사망 시 HP 바 자리에 결과 문구가 직접 치고 들어오도록 연출 노드 설계
+                string status = c.Hp <= 0 ? "[사망]" : $"HP: {c.Hp,3}/{c.MaxHp,3}";
+                int visualGauge = (int)(c.AtbGauge / 10);
+                string gaugeBar = new string('■', visualGauge) + new string('□', 10 - visualGauge);
+
+                Console.WriteLine($"{c.Name,-15} | {status,-10} | ATB: [{gaugeBar}] {c.AtbGauge:F0}%   ");
             }
-        }
 
-        // [노드 3] 턴 실행 제어 노드 (이벤트 실행 트리거)
-        private static async Task ExecuteTurnNode(Character character)
-        {
-            Console.SetCursorPosition(0, 6);
-            Console.WriteLine(new string(' ', Console.WindowWidth)); // 이전 텍스트 지우기
-            Console.SetCursorPosition(0, 6);
+            Console.WriteLine("=========================================================");
 
-            if (character.IsPlayer)
+            // [변경] 유동적인 배틀 로그에만 의존하지 않고, UI 중앙에 최종 결과 텍스트를 무조건 박아버림
+            if (_isBattleOver)
             {
-                // [서브 노드] 플레이어 입력 대기 노드 진입
-                Console.WriteLine($"▶ {character.Name}의 턴! 행동을 선택하세요. (1: 공격 / 2: 방어)");
-                string input = Console.ReadLine();
-
-                Character target = _characters.Find(c => !c.IsPlayer && c.Hp > 0);
-                if (target != null && input == "1")
-                {
-                    target.Hp -= 25;
-                    Console.WriteLine($"-> {character.Name}이(가) {target.Name}에게 25의 피해를 주었습니다!");
-                }
-                else
-                {
-                    Console.WriteLine($"-> {character.Name}은(는) 방어 자세를 취했습니다.");
-                }
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine($"{_battleResultText,-55}");
+                Console.ResetColor();
+            }
+            else if (_isPlayerTurnActive)
+            {
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine("[★ 당신의 턴! 실시간 진행 중] 1: 일반공격 | 2: 자가회복   ");
+                Console.ResetColor();
             }
             else
             {
-                // [서브 노드] AI 행동 결정 노드 진ip
-                Console.WriteLine($"{character.Name}의 턴! 적이 공격해옵니다.");
-                await Task.Delay(800); // 몬스터 행동 연출을 위한 인위적 지연
-
-                Character target = _characters.Find(c => c.IsPlayer && c.Hp > 0);
-                if (target != null)
-                {
-                    target.Hp -= 15;
-                    Console.WriteLine($"-> {character.Name}이(가) {target.Name}에게 15의 피해를 주었습니다!");
-                }
+                Console.WriteLine("[...게이지 충전 중...] 상대의 공격에 대비하세요.           ");
             }
 
-            // 턴 종료 후 게이지 리셋
-            character.AtbGauge = 0;
-            await Task.Delay(1500); // 연출을 읽을 수 있도록 대기
-            Console.Clear();
-            Console.WriteLine("=== 비주얼 스크립트 스타일 ATB 전투 진행 중 ===");
-        }
+            Console.WriteLine("======================= 배틀 로그 =======================");
 
-        // [노드 4] 게임 종료 조건 조건식 노드
-        private static void CheckBattleOver()
-        {
-            var player = _characters.Find(c => c.IsPlayer);
-            var monster = _characters.Find(c => !c.IsPlayer);
-
-            if (player.Hp <= 0)
+            foreach (var log in _battleLogs)
             {
-                Console.SetCursorPosition(0, 10);
-                Console.WriteLine("▶ 패배... 전멸했습니다.");
-                _isBattleOver = true;
-            }
-            else if (monster.Hp <= 0)
-            {
-                Console.SetCursorPosition(0, 10);
-                Console.WriteLine("▶ 승리! 몬스터를 처치했습니다.");
-                _isBattleOver = true;
+                Console.WriteLine(log + new string(' ', Console.WindowWidth - log.Length));
             }
         }
     }
