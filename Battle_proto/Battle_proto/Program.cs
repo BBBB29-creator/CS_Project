@@ -195,32 +195,40 @@ namespace RealtimeAtbRpg
 
         private static void RenderScreen()
         {
-            // 좌표를 위로 강제 고정하여 잔상 방지
             Console.SetCursorPosition(0, 1);
             Console.WriteLine("=========================================================");
 
             foreach (var c in _characters)
             {
-                // [변경] 사망 시 HP 바 자리에 결과 문구가 직접 치고 들어오도록 연출 노드 설계
                 string status = c.Hp <= 0 ? "[사망]" : $"HP: {c.Hp,3}/{c.MaxHp,3}";
                 int visualGauge = (int)(c.AtbGauge / 10);
                 string gaugeBar = new string('■', visualGauge) + new string('□', 10 - visualGauge);
 
-                Console.WriteLine($"{c.Name,-15} | {status,-10} | ATB: [{gaugeBar}] {c.AtbGauge:F0}%   ");
+                // [핵심 가시성 노드] 플레이어(용사)와 몬스터의 출력 색상을 다르게 분기
+                if (c.IsPlayer)
+                {
+                    Console.ForegroundColor = ConsoleColor.Cyan; // 용사는 선명한 청록색으로 출력
+                    Console.WriteLine($"{c.Name,-15} | {status,-10} | ATB: [{gaugeBar}] {c.AtbGauge:F0}%   ");
+                    Console.ResetColor(); // 다음 글자를 위해 색상 초기화
+                }
+                else
+                {
+                    // 몬스터는 기본 흰색 (혹은 원하시면 ConsoleColor.Red 등을 주셔도 좋습니다)
+                    Console.WriteLine($"{c.Name,-15} | {status,-10} | ATB: [{gaugeBar}] {c.AtbGauge:F0}%   ");
+                }
             }
 
             Console.WriteLine("=========================================================");
 
-            // [변경] 유동적인 배틀 로그에만 의존하지 않고, UI 중앙에 최종 결과 텍스트를 무조건 박아버림
             if (_isBattleOver)
             {
-                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.ForegroundColor = ConsoleColor.Yellow; // 종료 안내는 노란색으로 강조
                 Console.WriteLine($"{_battleResultText,-55}");
                 Console.ResetColor();
             }
             else if (_isPlayerTurnActive)
             {
-                Console.ForegroundColor = ConsoleColor.Green;
+                Console.ForegroundColor = ConsoleColor.Green; // 행동 입력 유도는 초록색 유지
                 Console.WriteLine("[★ 당신의 턴! 실시간 진행 중] 1: 일반공격 | 2: 자가회복   ");
                 Console.ResetColor();
             }
@@ -233,7 +241,16 @@ namespace RealtimeAtbRpg
 
             foreach (var log in _battleLogs)
             {
-                Console.WriteLine(log + new string(' ', Console.WindowWidth - log.Length));
+                // 배틀 로그 내부에서도 [용사] 단어가 들어가면 가시성을 주기 위한 처리
+                if (log.Contains("[용사]"))
+                {
+                    // 로그 전체를 청록색 빛이 돌게 하거나 기본 출력
+                    Console.WriteLine(log + new string(' ', Console.WindowWidth - log.Length));
+                }
+                else
+                {
+                    Console.WriteLine(log + new string(' ', Console.WindowWidth - log.Length));
+                }
             }
         }
     }
