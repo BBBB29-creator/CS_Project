@@ -1,6 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Threading.Tasks;
+﻿using System.Text;
 
 namespace RealtimeAtbRpg
 {
@@ -12,8 +10,10 @@ namespace RealtimeAtbRpg
         public int Speed { get; set; }
         public double AtbGauge { get; set; }
         public bool IsPlayer { get; set; }
+        public double CritChance { get; set; }
+        public double DodgeChance { get; set; }
 
-        public Character(string name, int hp, int speed, bool isPlayer)
+        public Character(string name, int hp, int speed, bool isPlayer, double crit, double dodge)
         {
             Name = name;
             Hp = hp;
@@ -21,6 +21,8 @@ namespace RealtimeAtbRpg
             Speed = (int)(speed * 0.8);
             AtbGauge = 0;
             IsPlayer = isPlayer;
+            CritChance = crit;
+            DodgeChance = dodge;
         }
     }
 
@@ -28,28 +30,26 @@ namespace RealtimeAtbRpg
     {
         private static List<Character> _characters = new List<Character>();
         private static bool _isBattleOver = false;
-        private static string _battleResultText = ""; // [추가] 최종 승패를 저장할 변수
+        private static string _battleResultText = "";
         private static Queue<string> _battleLogs = new Queue<string>();
-        private static bool _isPlayerTurnActive = false;
 
         private static readonly object _lockObject = new object();
+        private static readonly Random _random = new Random();
 
         static async Task Main(string[] args)
         {
-            // [핵심 추가] 콘솔창이 유니코드(UTF-8) 이모지를 지원하도록 인코딩 노드 설정
-            Console.OutputEncoding = System.Text.Encoding.UTF8;
-
+            Console.OutputEncoding = Encoding.UTF8;
             Console.Clear();
             Console.CursorVisible = false;
 
-            _characters.Add(new Character("용사 (플레이어)", 100, 40, true));
-            _characters.Add(new Character("슬라임 (몬스터)", 60, 25, false));
+            _characters.Add(new Character("용사 (플레이어)", 100, 40, true, 0.35, 0.15));
+            _characters.Add(new Character("슬라임 (몬스터)", 60, 25, false, 0.10, 0.20));
 
             _ = Task.Run(() => StartInputListener());
 
-            AddLog("=== 실시간 전투 시작! ===");
+            AddLog("=== 완전 실시간 게이지 소모 배틀! ===");
+            AddLog("▶ 즉시 시전 가능! - 1번 공격(4칸 필요) | 2번 자가회복(10칸 필요)");
 
-            // 메인 실시간 루프
             while (!_isBattleOver)
             {
                 lock (_lockObject)
@@ -60,21 +60,22 @@ namespace RealtimeAtbRpg
                 await Task.Delay(100);
             }
 
-            // [핵심 해결] 게임 종료 직후 0.2초 여유를 주어 백그라운드 렌더링 잔상을 기다림
             await Task.Delay(200);
 
-            // 최종 화면 강제 갱신
             lock (_lockObject)
             {
-                Console.Clear(); // 콘솔 잔상을 완벽하게 밀어버림
+                Console.Clear();
                 RenderScreen();
             }
 
-            // 하단 종료 안내
             Console.SetCursorPosition(0, 14);
-            Console.ForegroundColor = ConsoleColor.Yellow;
+            if (_battleResultText.Contains("패배"))
+                Console.ForegroundColor = ConsoleColor.Red;
+            else
+                Console.ForegroundColor = ConsoleColor.Yellow;
+
             Console.WriteLine("\n=========================================================");
-            Console.WriteLine("   전투가 종료되었습니다. 종료하려면 아무 키나 누르세요.");
+            Console.WriteLine(" 전투가 최종 종료되었습니다. 프로그램을 종료하려면 아무 키나 누르세요.");
             Console.WriteLine("=========================================================");
             Console.ResetColor();
 
@@ -100,17 +101,25 @@ namespace RealtimeAtbRpg
                     if (character.AtbGauge > 100) character.AtbGauge = 100;
                 }
 
+                // 몬스터는 기존처럼 10칸(100%)이 꽉 차야만 공격하도록 AI 노드 유지
                 if (!character.IsPlayer && character.AtbGauge >= 100)
                 {
                     ExecuteMonsterTurn(character);
                 }
-                else if (character.IsPlayer && character.AtbGauge >= 100)
-                {
-                    _isPlayerTurnActive = true;
-                }
             }
         }
 
+        private static bool CheckDodge(Character defender)
+        {
+            return _random.NextDouble() < defender.DodgeChance;
+        }
+
+        private static bool CheckCritical(Character attacker)
+        {
+            return _random.NextDouble() < attacker.CritChance;
+        }
+
+        // [핵심 변경] 상시대기 입력 제어 노드 (게이지가 100이 아니어도 즉시 반응)
         private static void StartInputListener()
         {
             while (!_isBattleOver)
@@ -121,45 +130,77 @@ namespace RealtimeAtbRpg
 
                     lock (_lockObject)
                     {
-                        if (_isPlayerTurnActive && !_isBattleOver)
+                        if (!_isBattleOver)
                         {
                             Character player = _characters.Find(c => c.IsPlayer);
                             Character target = _characters.Find(c => !c.IsPlayer && c.Hp > 0);
 
                             if (player == null || player.Hp <= 0) continue;
 
+                            // 1번: 일반 공격 (코스트 4칸 = 40 필요)
                             if (keyInfo.KeyChar == '1' && target != null)
                             {
-                                target.Hp -= 20;
-                                if (target.Hp <= 0) target.Hp = 0;
-
-                                AddLog($"[용사] 공격! -> {target.Name}에게 20의 피해!");
-                                ResetPlayerTurn(player);
-
-                                if (target.Hp <= 0)
+                                // [조건 변경] 100% 대기가 아니라 40 이상만 있으면 즉시 실행 가능!
+                                if (player.AtbGauge >= 40)
                                 {
-                                    _battleResultText = "▶ 🎉 승리! 슬라임을 완벽하게 제압했습니다!";
-                                    _isBattleOver = true;
-                                    _isPlayerTurnActive = false;
+                                    int baseDamage = 20;
+
+                                    if (CheckDodge(target))
+                                    {
+                                        AddLog($"💨 [용사]의 공격을 {target.Name}이(가) 날렵하게 회피했습니다! (Miss)");
+                                    }
+                                    else
+                                    {
+                                        if (CheckCritical(player))
+                                        {
+                                            int critDamage = (int)(baseDamage * 1.5);
+                                            target.Hp -= critDamage;
+                                            AddLog($"🔥💥 [CRITICAL!!!] 용사의 일격! -> {target.Name}에게 {critDamage}의 치명상!");
+                                        }
+                                        else
+                                        {
+                                            target.Hp -= baseDamage;
+                                            AddLog($"⚔️ [용사] 공격! -> {target.Name}에게 {baseDamage}의 피해!");
+                                        }
+                                    }
+
+                                    if (target.Hp <= 0) target.Hp = 0;
+
+                                    // 공격 코스트 4칸(40%) 차감
+                                    player.AtbGauge -= 40;
+
+                                    if (target.Hp <= 0)
+                                    {
+                                        _battleResultText = "▶ 🎉 승리! 슬라임을 완벽하게 제압했습니다!";
+                                        _isBattleOver = true;
+                                    }
+                                }
+                                else
+                                {
+                                    // 게이지 부족 시 경고 소리 또는 시스템 로그 연출 노드
+                                    AddLog("⚠️ [시스템] 게이지가 부족합니다! (공격에는 최소 4칸이 필요합니다)");
                                 }
                             }
+                            // 2번: 자가 회복 (코스트 10칸 = 100 필요)
                             else if (keyInfo.KeyChar == '2')
                             {
-                                player.Hp = Math.Min(player.MaxHp, player.Hp + 15);
-                                AddLog($"✨ [용사] 힐! -> 자신의 HP를 15 회복했습니다.");
-                                ResetPlayerTurn(player);
+                                if (player.AtbGauge >= 100)
+                                {
+                                    player.Hp = Math.Min(player.MaxHp, player.Hp + 15);
+                                    AddLog($"✨ [용사] 힐! -> 자신의 HP를 15 회복했습니다.");
+
+                                    player.AtbGauge -= 100; // 10칸 전량 소모
+                                }
+                                else
+                                {
+                                    AddLog("⚠️ [시스템] 게이지가 부족합니다! (회복에는 10칸(100%)이 필요합니다)");
+                                }
                             }
                         }
                     }
                 }
                 System.Threading.Thread.Sleep(20);
             }
-        }
-
-        private static void ResetPlayerTurn(Character player)
-        {
-            player.AtbGauge = 0;
-            _isPlayerTurnActive = false;
         }
 
         private static void ExecuteMonsterTurn(Character monster)
@@ -169,16 +210,33 @@ namespace RealtimeAtbRpg
             Character target = _characters.Find(c => c.IsPlayer && c.Hp > 0);
             if (target != null)
             {
-                target.Hp -= 12;
-                if (target.Hp <= 0) target.Hp = 0;
+                int baseDamage = 12;
 
-                AddLog($"슬라임 (몬스터)의 기습 공격! -> [용사]에게 12의 피해!");
+                if (CheckDodge(target))
+                {
+                    AddLog($"💨 {monster.Name}의 기습! 용사가 간발의 차로 회피했습니다!");
+                }
+                else
+                {
+                    if (CheckCritical(monster))
+                    {
+                        int critDamage = (int)(baseDamage * 1.5);
+                        target.Hp -= critDamage;
+                        AddLog($"🚨 💥 {monster.Name}의 뼈아픈 치명타! -> [용사]에게 {critDamage} of 대미지!");
+                    }
+                    else
+                    {
+                        target.Hp -= baseDamage;
+                        AddLog($"💥 {monster.Name}의 기습 공격! -> [용사]에게 {baseDamage}의 피해!");
+                    }
+                }
+
+                if (target.Hp <= 0) target.Hp = 0;
 
                 if (target.Hp <= 0)
                 {
                     _battleResultText = "▶ 💀 패배... 용사가 차가운 바닥에 쓰러졌습니다.";
                     _isBattleOver = true;
-                    _isPlayerTurnActive = false;
                 }
             }
             monster.AtbGauge = 0;
@@ -202,18 +260,19 @@ namespace RealtimeAtbRpg
             {
                 string status = c.Hp <= 0 ? "[사망]" : $"HP: {c.Hp,3}/{c.MaxHp,3}";
                 int visualGauge = (int)(c.AtbGauge / 10);
-                string gaugeBar = new string('■', visualGauge) + new string('□', 10 - visualGauge);
 
-                // [핵심 가시성 노드] 플레이어(용사)와 몬스터의 출력 색상을 다르게 분기
+                string filledBar = new string('■', visualGauge);
+                string emptyBar = new string('□', 10 - visualGauge);
+                string gaugeBar = filledBar + emptyBar;
+
                 if (c.IsPlayer)
                 {
-                    Console.ForegroundColor = ConsoleColor.Cyan; // 용사는 선명한 청록색으로 출력
+                    Console.ForegroundColor = ConsoleColor.Cyan;
                     Console.WriteLine($"{c.Name,-15} | {status,-10} | ATB: [{gaugeBar}] {c.AtbGauge:F0}%   ");
-                    Console.ResetColor(); // 다음 글자를 위해 색상 초기화
+                    Console.ResetColor();
                 }
                 else
                 {
-                    // 몬스터는 기본 흰색 (혹은 원하시면 ConsoleColor.Red 등을 주셔도 좋습니다)
                     Console.WriteLine($"{c.Name,-15} | {status,-10} | ATB: [{gaugeBar}] {c.AtbGauge:F0}%   ");
                 }
             }
@@ -222,7 +281,6 @@ namespace RealtimeAtbRpg
 
             if (_isBattleOver)
             {
-                // [이거 딱 4줄만 추가!] 패배 글자가 있으면 빨간색, 없으면 기존 하늘색(Cyan)
                 if (_battleResultText.Contains("패배"))
                     Console.ForegroundColor = ConsoleColor.Red;
                 else
@@ -231,30 +289,35 @@ namespace RealtimeAtbRpg
                 Console.WriteLine($"{_battleResultText,-55}");
                 Console.ResetColor();
             }
-            else if (_isPlayerTurnActive)
-            {
-                Console.ForegroundColor = ConsoleColor.Green; // 행동 입력 유도는 초록색 유지
-                Console.WriteLine("[★ 당신의 턴! 실시간 진행 중] 1: 일반공격 | 2: 자가회복   ");
-                Console.ResetColor();
-            }
             else
             {
-                Console.WriteLine("[...게이지 충전 중...] 상대의 공격에 대비하세요.           ");
+                // [가이드라인 변경] 100% 대기 플래그가 없으므로 실시간 행동 가이드 출력
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine("[★ 실시간 난타전!] 1: 일반공격 (코스트 4칸) | 2: 자가회복 (코스트 10칸)   ");
+                Console.ResetColor();
             }
 
             Console.WriteLine("======================= 배틀 로그 =======================");
 
             foreach (var log in _battleLogs)
             {
-                // 배틀 로그 내부에서도 [용사] 단어가 들어가면 가시성을 주기 위한 처리
-                if (log.Contains("[용사]"))
+                string paddedLog = log + new string(' ', Console.WindowWidth - log.Length);
+
+                if (log.Contains("[CRITICAL!!!]") || log.Contains("치명타!"))
                 {
-                    // 로그 전체를 청록색 빛이 돌게 하거나 기본 출력
-                    Console.WriteLine(log + new string(' ', Console.WindowWidth - log.Length));
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine(paddedLog);
+                    Console.ResetColor();
+                }
+                else if (log.Contains("회피했습니다!"))
+                {
+                    Console.ForegroundColor = ConsoleColor.DarkYellow;
+                    Console.WriteLine(paddedLog);
+                    Console.ResetColor();
                 }
                 else
                 {
-                    Console.WriteLine(log + new string(' ', Console.WindowWidth - log.Length));
+                    Console.WriteLine(paddedLog);
                 }
             }
         }
