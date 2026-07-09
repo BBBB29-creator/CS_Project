@@ -1,86 +1,101 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Text;
-using System.Threading.Tasks;
+using System.Threading;
 
 namespace RealtimeAtbRpg
 {
     class Program
     {
-        private static List<Character> _characters = new List<Character>();
         private static Queue<string> _battleLogs = new Queue<string>();
         private static bool _isBattleOver = false;
         private static string _battleResultText = "";
-        private static readonly object _lockObject = new object();
-
-        static async Task Main(string[] args)
-        {
-            Console.OutputEncoding = Encoding.UTF8;
-            Console.Clear(); Console.CursorVisible = false;
-
-            // 초기 데이터 세팅 및 몬스터 10마리 명단 생성
-            _characters.Add(new Player("용사 (플레이어)", 100, 40, 0.35, 0.15));
-            WaveManager.InitializeWave();
-            if (WaveManager.MonsterWave.Count > 0) _characters.Add(WaveManager.MonsterWave.Dequeue());
-
-            // 상시 키 입력 루프 가동
-            _ = Task.Run(() => {
-                while (!_isBattleOver)
-                {
-                    System.Threading.Thread.Sleep(20);
-                    if (!Console.KeyAvailable) continue; // 입력 없으면 패스
-
-                    ConsoleKeyInfo keyInfo = Console.ReadKey(intercept: true);
-
-                    lock (_lockObject)
-                    {
-                        if (_isBattleOver) break;
-
-                        // Character 리스트에서 Player 객체를 안전하게 찾아옵니다.
-                        Player player = _characters.Find(c => c is Player) as Player;
-                        Character target = _characters.Find(c => !c.IsPlayer && c.Hp > 0);
-
-                        if (player == null || player.Hp <= 0) continue;
-
-                        // [핵심 축소] 이제 InputManager 대신 용사 본인에게 키보드 값을 던져 처리하게 합니다!
-                        player.HandleInput(keyInfo.KeyChar, target, AddLog);
-                    }
-                }
-            });
-
-            AddLog("=== 완전 모듈화 압축 실시간 ATB 배틀 ===");
-
-            // 메인 루프 (중앙 시계탑)
-            while (!_isBattleOver)
-            {
-                lock (_lockObject)
-                {
-                    GaugeManager.UpdateAtb(_characters, AddLog);
-                    string status = WaveManager.CheckWave(_characters);
-                    if (status.StartsWith("▶")) { _battleResultText = status; _isBattleOver = true; }
-                    else if (!string.IsNullOrEmpty(status)) AddLog(status);
-
-                    UIManager.RenderScreen(_characters, _battleLogs, _isBattleOver, _battleResultText, WaveManager.MonsterWave.Count);
-                }
-                await Task.Delay(100);
-            }
-
-            // 최종 정산 화면 출력
-            await Task.Delay(200);
-            lock (_lockObject) { Console.Clear(); UIManager.RenderScreen(_characters, _battleLogs, _isBattleOver, _battleResultText, WaveManager.MonsterWave.Count); }
-
-            Console.SetCursorPosition(0, 14);
-            Console.ForegroundColor = _battleResultText.Contains("패배") ? ConsoleColor.Red : ConsoleColor.Yellow;
-            Console.WriteLine("\n=========================================================");
-            Console.WriteLine(" 전투가 종료되었습니다. 프로그램을 종료하려면 아무 키나 누르세요.");
-            Console.WriteLine("=========================================================");
-            Console.ResetColor(); Console.CursorVisible = true; Console.ReadKey();
-        }
 
         public static void AddLog(string message)
         {
             _battleLogs.Enqueue(message);
             if (_battleLogs.Count > 5) _battleLogs.Dequeue();
+        }
+
+        static void Main(string[] args)
+        {
+            Console.CursorVisible = false;
+            Console.Clear();
+
+            List<Character> activeCharacters = new List<Character>();
+            Player player = new Player("용사", 100, 50, 0.1, 0.0);
+
+            ItemData hpPotion = new ItemData(1010, ItemType.Consumable, "물약", "체력 30 회복", HpEffectType.FixedValue, 30, 1, 0, 1);
+            ItemData bigPotion = new ItemData(1012, ItemType.Consumable, "대형 물약", "체력을 전부 회복", HpEffectType.FullRecovery, 0, 8, 0, 6);
+            ItemData bomb = new ItemData(1008, ItemType.Consumable, "폭탄", "다중 피해 투척 무기", HpEffectType.None, 0, 3, 30, 4);
+
+            player.MyInventory.AddItem(hpPotion);
+            player.MyInventory.AddItem(bigPotion);
+            player.MyInventory.AddItem(bomb);
+            player.AtbGauge = 50;
+
+            WaveManager.InitializeWave();
+            WaveManager.SpawnRandomMonsters(activeCharacters);
+            activeCharacters.Add(player);
+
+            InputManager inputManager = new InputManager(player);
+
+            AddLog("⚔️ 실시간 ATB RPG 테스트를 시작합니다!");
+
+            while (true)
+            {
+                int remainingMonsters = activeCharacters.FindAll(c => !c.IsPlayer && c.Hp > 0).Count;
+
+                UIManager.RenderScreen(
+                    activeCharacters,
+                    _battleLogs,
+                    _isBattleOver,
+                    _battleResultText,
+                    remainingMonsters,
+                    inputManager.CurrentState,
+                    player,
+                    inputManager.IsTargetingMode
+                );
+
+                if (_isBattleOver)
+                {
+                    if (Console.KeyAvailable) break;
+                    Thread.Sleep(100);
+                    continue;
+                }
+
+                // 💡 [시간 정지 버그 해결]: 인벤토리뿐만 아니라, 플레이어가 조준 모드(IsTargetingMode)일 때도 
+                // 게이지가 흘러가지 않도록 차단하여 유저가 신중하게 적 번호를 고를 수 있게 보장합니다!
+                if (inputManager.CurrentState == GameState.Battle && !inputManager.IsTargetingMode)
+                {
+                    GaugeManager.UpdateAtb(activeCharacters, inputManager.CurrentState, (monsterLog) => {
+                        AddLog(monsterLog);
+                    });
+                }
+
+                string waveStatus = WaveManager.CheckWave(activeCharacters);
+                if (!string.IsNullOrEmpty(waveStatus))
+                {
+                    if (waveStatus.Contains("💀 패배"))
+                    {
+                        _isBattleOver = true;
+                        _battleResultText = waveStatus;
+                    }
+                    else if (waveStatus.Contains("🎉 승리") && inputManager.CurrentState == GameState.Battle)
+                    {
+                        inputManager.CurrentState = GameState.SelectNext;
+                        AddLog("🏆 전투 승리! 다음 행동을 선택하세요.");
+                    }
+                }
+
+                if (Console.KeyAvailable)
+                {
+                    ConsoleKeyInfo keyInfo = Console.ReadKey(true);
+                    char keyChar = char.ToLower(keyInfo.KeyChar);
+                    inputManager.HandleGlobalInput(keyChar, activeCharacters, AddLog);
+                }
+
+                Thread.Sleep(100);
+            }
         }
     }
 }
