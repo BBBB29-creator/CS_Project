@@ -9,9 +9,6 @@ namespace RealtimeAtbRpg
         private static Queue<string> _battleLogs = new Queue<string>();
         private static bool _isBattleOver = false;
         private static string _battleResultText = "";
-
-        // 💡 [화면 고정의 핵심]: 이전 프레임의 게임 상태를 기억하여, 
-        // 화면 상태가 바뀔 때만 강제로 Console.Clear()를 시켜주는 감시 변수입니다.
         private static GameState _lastState = GameState.Battle;
 
         public static void AddLog(string message)
@@ -33,10 +30,11 @@ namespace RealtimeAtbRpg
             List<Character> activeCharacters = new List<Character>();
             Player player = new Player("모험가", 100, 50, 0.1, 0.0);
 
+            // 초기 세팅
             ItemData hpPotion = new ItemData(1010, ItemType.Consumable, "물약", "체력 30 회복", HpEffectType.FixedValue, 30, 1, 0, 1);
             player.MyInventory.AddItem(hpPotion);
             player.AtbGauge = 50;
-            player.Trophy = 15; // 보유 Trophy 15개
+            player.Trophy = 15; // 초기 자금 15개 지급
 
             Shop.InitializeShop();
             WaveManager.InitializeWave();
@@ -45,17 +43,19 @@ namespace RealtimeAtbRpg
 
             InputManager inputManager = new InputManager(player);
 
+            // 💡 [3단계 수정]: 게임 시작 시 기본 상태를 'Title'로 강제 지정합니다!
+            inputManager.CurrentState = GameState.Title;
+
             AddLog("⚔️ 실시간 ATB RPG 테스트를 시작합니다!");
 
-            // 시작할 때 화면 한번 쾌적하게 렌더링
+            // 첫 타이틀 화면 렌더링
             Render(activeCharacters, inputManager, player);
 
+            // 💡 메인 루프 시작
             while (true)
             {
-                // 💡 [화면 갱신 조건문 개편]: 
-                // 1. 일반 실시간 전투(Battle) 중일 때는 0.1초마다 실시간 게이지 변화 때문에 화면을 계속 다시 그립니다.
-                // 2. 하지만 상점, 인벤토리, 선택창 등 시간이 멈춘 정비 상태일 때는 0.1초마다 화면을 그리지 않고 스킵합니다!
-                if (inputManager.CurrentState == GameState.Battle)
+                // 💡 [3단계 수정]: 전투 중이거나 타이틀 화면일 때만 화면을 실시간 갱신합니다.
+                if (inputManager.CurrentState == GameState.Battle || inputManager.CurrentState == GameState.Title)
                 {
                     Render(activeCharacters, inputManager, player);
                 }
@@ -67,7 +67,7 @@ namespace RealtimeAtbRpg
                     continue;
                 }
 
-                // 일반 전투 상태일 때만 게이지를 실시간으로 흐르게 만듭니다.
+                // 💡 [3단계 수정]: 오직 전투(Battle) 상태이면서 조준 중이 아닐 때만 시간이 실시간으로 흐릅니다.
                 if (inputManager.CurrentState == GameState.Battle && !inputManager.IsTargetingMode)
                 {
                     GaugeManager.UpdateAtb(activeCharacters, inputManager.CurrentState, (monsterLog) => {
@@ -75,7 +75,7 @@ namespace RealtimeAtbRpg
                     });
                 }
 
-                // 전투 종료 및 상점 이동 트리거
+                // 전투 상태일 때만 승리/패배 조건을 체크합니다 (데자뷔 버그 차단)
                 if (inputManager.CurrentState == GameState.Battle)
                 {
                     string waveStatus = WaveManager.CheckWave(activeCharacters);
@@ -89,30 +89,38 @@ namespace RealtimeAtbRpg
                         }
                         else if (waveStatus.Contains("🎉 승리"))
                         {
-                            player.Trophy += 5;
-                            
+                            player.Trophy += 5; // 🏆 전리품 +5 지급
                             inputManager.CurrentState = GameState.SelectNext;
-                            
                             AddLog($"🎉 전투 승리! 전리품 [+5 Trophy] 획득! (현재: {player.Trophy}개)");
                             AddLog("👉 1번을 눌러 상점에 가거나, 2번을 눌러 다음 전투로 가세요.");
-
-                            // 💡 상태가 변했으므로 화면을 즉시 단 한 번 갱신해 줍니다.
                             Render(activeCharacters, inputManager, player);
                         }
                     }
                 }
 
-                // 💡 키보드 조작 접수 (유저가 키를 누른 바로 그 타이밍에만 이벤트 처리)
+                // 💡 키보드 조작 접수
                 if (Console.KeyAvailable)
                 {
                     ConsoleKeyInfo keyInfo = Console.ReadKey(true);
                     char keyChar = char.ToLower(keyInfo.KeyChar);
 
-                    // 입력 처리 수행
-                    inputManager.HandleGlobalInput(keyChar, activeCharacters, AddLog);
+                    // 💡 [3단계 수정]: 현재 타이틀 화면 상태라면 'S' 키 입력을 감지해 탈출합니다.
+                    if (inputManager.CurrentState == GameState.Title)
+                    {
+                        if (keyChar == 's')
+                        {
+                            Console.Clear();
+                            inputManager.CurrentState = GameState.Battle; // 전투 개시!
+                            AddLog("🚩 모험이 시작되었습니다! 전장의 적들을 격파하세요!");
+                        }
+                    }
+                    else
+                    {
+                        // 일반 인게임(전투, 상점, 인벤토리) 조작 접수
+                        inputManager.HandleGlobalInput(keyChar, activeCharacters, AddLog);
+                    }
 
-                    // 💡 [가장 중요]: 유저가 상점 등에서 키를 눌러 아이템을 사거나 정비를 했다면,
-                    // 무한 루프가 아닌 '키 입력 이벤트 직후'에 화면을 딱 한 번만 수동으로 갱신해 줍니다!
+                    // 입력 직후 화면을 딱 1프레임 갱신해 줍니다.
                     Render(activeCharacters, inputManager, player);
                 }
 
@@ -120,17 +128,15 @@ namespace RealtimeAtbRpg
             }
         }
 
-        // 💡 렌더링 코드가 중복되는 것을 막고, 화면 전환 시 완전 세탁(Clear) 기능을 통합한 헬퍼 메서드
         private static void Render(List<Character> activeCharacters, InputManager inputManager, Player player)
         {
             int remainingMonsters = activeCharacters.FindAll(c => !c.IsPlayer && c.Hp > 0).Count;
 
-            // 💡 전투 -> 상점 / 상점 -> 전투 등으로 화면 상태(State)가 바뀌는 역사적인 순간에만 
-            // 딱 한 번 도화지를 완전히 탈탈 털어서 스크롤 밀림 현상을 물리적으로 파괴합니다!
+            // 상태가 바뀔 때(Title -> Battle, Battle -> Shop 등)만 도화지를 완전히 탈탈 틉니다.
             if (inputManager.CurrentState != _lastState)
             {
                 Console.Clear();
-                _lastState = inputManager.CurrentState; // 최신 상태 업데이트
+                _lastState = inputManager.CurrentState;
             }
 
             UIManager.RenderScreen(

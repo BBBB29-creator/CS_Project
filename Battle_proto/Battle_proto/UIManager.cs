@@ -82,7 +82,41 @@ namespace RealtimeAtbRpg
             WriteCleanLine("=========================================================");
 
             // 3. 상태별 조작 메뉴 분기 처리
-            if (isBattleOver)
+            WriteCleanLine("=========================================================");
+
+            // =================================================================
+            // 💡 [2단계 코드가 들어갈 정확한 위치!]
+            // 기존 if (isBattleOver)를 else if로 밀어내고, 맨 위에 Title 분기를 얹어줍니다.
+            // =================================================================
+            if (currentState == GameState.Title)
+            {
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                WriteCleanLine("   =====================================================");
+                WriteCleanLine("      ____  _____    _    _   _____ ___ __  __ _____ ");
+                WriteCleanLine("     |  _ \\| ____|  / \\  | | |_   _|_ _|  \\/  | ____|");
+                WriteCleanLine("     | |_) |  _|   / _ \\ | |   | |  | || |\\/| |  _|  ");
+                WriteCleanLine("     |  _ <| |___ / ___ \\| |___| |  | || |  | | |___ ");
+                WriteCleanLine("     |_| \\_\\_____/_/   \\_\\_____|_| |___|_|  |_|_____|");
+                WriteCleanLine("                                                      ");
+                WriteCleanLine("                 O=======================>            ");
+                WriteCleanLine("                   REALTIME ATB RPG v1.0              ");
+                WriteCleanLine("   =====================================================");
+                Console.ResetColor();
+
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                WriteCleanLine("");
+                WriteCleanLine("          👉 [ Press 'S' Key to Start Adventure ]      ");
+                WriteCleanLine("");
+                Console.ResetColor();
+
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                WriteCleanLine("            (C) 2026 Adventurer Studio. All Rights Reserved. ");
+                Console.ResetColor();
+
+                return; // 타이틀 화면일 때는 하단 몬스터나 배틀로그를 그리지 않고 탈출!
+            }
+            // 💡 여기서부터 기존에 가지고 계시던 조건문들이 자연스럽게 'else if'로 이어집니다.
+            else if (isBattleOver)
             {
                 Console.ForegroundColor = battleResultText.Contains("패배") ? ConsoleColor.Red : ConsoleColor.Cyan;
                 Console.WriteLine(battleResultText + " \x1b[K");
