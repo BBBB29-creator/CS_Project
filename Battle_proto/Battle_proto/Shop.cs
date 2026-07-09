@@ -55,7 +55,7 @@ namespace RealtimeAtbRpg
             // 3. 보유 전리품(Trophy) 검사
             if (player.Trophy < selectedItem.Price)
             {
-                addLog($"🏆 Trophy가 부족합니다! [{selectedItem.Name}] 구매에는 {selectedItem.Price}개의 전리품이 필요합니다. (보유: {player.Trophy}개)");
+                addLog($" 전리품이 부족합니다! [{selectedItem.Name}] 구매에는 {selectedItem.Price}개의 전리품이 필요합니다. (보유: {player.Trophy}개)");
                 return;
             }
 
@@ -63,7 +63,7 @@ namespace RealtimeAtbRpg
             player.Trophy -= selectedItem.Price;
             player.MyInventory.AddItem(selectedItem);
 
-            addLog($"🏪 구매 완료! [{selectedItem.Name}]을(를) 획득했습니다. (-{selectedItem.Price} Trophy / 남은 전리품: {player.Trophy}개)");
+            addLog($"🏪 구매 완료! [{selectedItem.Name}]을(를) 획득했습니다. (-{selectedItem.Price} 전리품 / 남은 전리품: {player.Trophy}개)");
         }
     }
 }
